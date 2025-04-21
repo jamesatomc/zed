@@ -1,0 +1,36 @@
+name: 'Build Windows Executable'
+description: 'Builds the Zed executable for Windows'
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+        target: x86_64-pc-windows-msvc
+
+    - name: Install dependencies
+      shell: powershell
+      run: |
+        # Install any specific Windows dependencies here
+        # For example:
+        choco install llvm -y
+        
+    - name: Build Zed executable
+      shell: powershell
+      run: |
+        cargo build --release --bin zed
+        
+    - name: Package executable
+      shell: powershell
+      run: |
+        # Create directory for packaged app
+        mkdir -p ${{ github.workspace }}/dist
+        
+        # Copy executable and dependencies
+        cp ${{ github.workspace }}/target/release/zed.exe ${{ github.workspace }}/dist/
+        
+        # Copy any additional required files
+        # cp -r ${{ github.workspace }}/assets ${{ github.workspace }}/dist/
