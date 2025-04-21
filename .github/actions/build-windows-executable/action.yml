@@ -15,21 +15,33 @@ runs:
       with:
         version: "15.0"
 
-    - name: Configure Spectre mitigation
-      shell: powershell
+    - name: Find Spectre mitigation path
+      shell: pwsh
       run: |
-        # Find the location of VS spectre-mitigated libs
-        $spectrePath = Get-ChildItem -Path "C:\Program Files (x86)\Microsoft Visual Studio" -Recurse -Filter "spectre-mitigated" | Select-Object -First 1 -ExpandProperty FullName
-        if ($spectrePath) {
-          echo "SPECTRE_MITIGATION_PATH=$spectrePath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "Found Spectre mitigation libraries at: $spectrePath"
-        } else {
-          Write-Warning "Could not find Spectre mitigation libraries!"
-       
+        $paths = @(
+          "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\lib\spectre",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\*\lib\spectre"
+        )
         
-        # Configure environment for msvc_spectre_libs
-        echo "SPECTRE_LLVM_LIB=$spectrePath\lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "VCPKG_FEATURE_FLAGS=-binarycaching" | Out-File -FilePath $env:GITHUB_ENV -Append
+        $spectrePath = $null
+        foreach ($pattern in $paths) {
+          $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($found) {
+            $spectrePath = $found.FullName
+            break
+          }
+        }
+        
+        if ($spectrePath) {
+          Write-Host "Found Spectre mitigation libraries at: $spectrePath"
+        } else {
+          Write-Host "Could not find Spectre mitigation libraries, using default path"
+          $spectrePath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.36.32532\lib\spectre"
+        }
+        
+        "SPECTRE_MITIGATION_PATH=$spectrePath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "SPECTRE_LLVM_LIB=$spectrePath\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "VCPKG_FEATURE_FLAGS=-binarycaching" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Set up shorter paths for Cargo
       shell: powershell
