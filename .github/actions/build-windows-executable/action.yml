@@ -55,8 +55,17 @@ runs:
           Copy-Item -Path "assets" -Destination "dist/" -Recurse
         }
         
-        # Copy any other required files (themes, plugins, etc)
-        # Copy-Item "path/to/resources" -Destination "dist/" -Recurse
+        # Copy any required DLLs or configurations
+        if (Test-Path "crates/zed/config") {
+          Copy-Item -Path "crates/zed/config" -Destination "dist/" -Recurse
+        }
         
         # Create a zip archive of the distribution
         Compress-Archive -Path "dist/*" -DestinationPath "zed-windows.zip" -Force
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: zed-windows
+        path: zed-windows.zip
+        retention-days: 7
