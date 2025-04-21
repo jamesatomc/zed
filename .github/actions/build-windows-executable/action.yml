@@ -15,33 +15,69 @@ runs:
       with:
         version: "15.0"
 
-    - name: Find Spectre mitigation path
+    - name: Find and configure Spectre mitigation
       shell: pwsh
       run: |
-        $paths = @(
-          "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\lib\spectre",
-          "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\*\lib\spectre"
-        )
+        # Find Visual Studio installation path
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        Write-Host "VS Path: $vsPath"
         
-        $spectrePath = $null
-        foreach ($pattern in $paths) {
-          $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($found) {
-            $spectrePath = $found.FullName
-            break
+        # Find MSVC Tools version
+        $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
+        Write-Host "MSVC Path: $msvcPath"
+        
+        # Locate Spectre libraries
+        $spectrePath = Join-Path -Path $msvcPath.FullName -ChildPath "lib\spectre"
+        Write-Host "Looking for Spectre libraries at: $spectrePath"
+        
+        if (Test-Path $spectrePath) {
+          Write-Host "Found Spectre mitigation libraries at: $spectrePath"
+        } else {
+          Write-Host "Trying alternative locations..."
+          $paths = @(
+            "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\lib\spectre",
+            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\lib\spectre"
+          )
+          
+          foreach ($pattern in $paths) {
+            $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Sort-Object -Property Name -Descending | Select-Object -First 1
+            if ($found) {
+              $spectrePath = $found.FullName
+              Write-Host "Found Spectre libraries at: $spectrePath"
+              break
+            }
+          }
+        }
+
+        if (-not (Test-Path $spectrePath)) {
+          Write-Host "WARNING: Could not locate Spectre mitigation libraries!"
+          Write-Host "Attempting to install them directly..."
+          
+          # Try to install the component again directly
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe" modify `
+            --installPath "$vsPath" `
+            --quiet --norestart `
+            --add Microsoft.VisualStudio.Component.VC.ATLMFC.Spectre `
+            --add Microsoft.VisualStudio.Component.VC.MFC.SPECTRE `
+            --add Microsoft.VisualStudio.Component.VC.Spectre `
+            --add Microsoft.VisualStudio.Component.Spectre.MitigatedLibs.Latest
+          
+          # Check again after installation
+          if (Test-Path $spectrePath) {
+            Write-Host "Successfully installed Spectre libraries at: $spectrePath"
+          } else {
+            Write-Host "WARNING: Still could not find Spectre libraries. Build may fail."
           }
         }
         
-        if ($spectrePath) {
-          Write-Host "Found Spectre mitigation libraries at: $spectrePath"
-        } else {
-          Write-Host "Could not find Spectre mitigation libraries, using default path"
-          $spectrePath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.36.32532\lib\spectre"
-        }
-        
+        # Set required environment variables
+        "VCINSTALLDIR=$vsPath\VC\" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "VCToolsInstallDir=$msvcPath\FullName" | Out-File -FilePath $env:GITHUB_ENV -Append
         "SPECTRE_MITIGATION_PATH=$spectrePath" | Out-File -FilePath $env:GITHUB_ENV -Append
-        "SPECTRE_LLVM_LIB=$spectrePath\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
         "VCPKG_FEATURE_FLAGS=-binarycaching" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Set the special environment variable needed by msvc_spectre_libs crate
+        "MSVC_SPECTRE_LIBS_PATH=$spectrePath" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Set up shorter paths for Cargo
       shell: powershell
@@ -68,12 +104,15 @@ runs:
       run: |
         $env:RUSTFLAGS = "-C target-feature=+crt-static"
         
-        # Explicitly set lib paths
-        $fullSpectreLibPath = $env:SPECTRE_LLVM_LIB
-        echo "Using Spectre lib path: $fullSpectreLibPath"
+        # Set paths for Spectre-mitigated libraries so cargo can find them
+        $env:LIB = "$env:SPECTRE_MITIGATION_PATH\x64;$env:LIB"
+        $env:MSVC_SPECTRE_LIBS_PATH = "$env:SPECTRE_MITIGATION_PATH"
         
-        # Skip pet-related dependencies with path length issues
-        cargo build --release --bin zed --no-default-features
+        Write-Host "Using Spectre libraries from: $env:MSVC_SPECTRE_LIBS_PATH"
+        Write-Host "LIB path includes: $env:LIB"
+        
+        # Build with verbose output to see what's happening
+        cargo build --release --bin zed --no-default-features -v
         if (-not $?) { throw "Build failed" }
         
     - name: Verify build output
