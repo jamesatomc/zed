@@ -14,8 +14,6 @@ runs:
     - name: Install dependencies
       shell: powershell
       run: |
-        # Install any specific Windows dependencies here
-        # For example:
         choco install llvm -y
         
     - name: Build Zed executable
@@ -26,11 +24,8 @@ runs:
     - name: Package executable
       shell: powershell
       run: |
-        # Create directory for packaged app
-        mkdir -p ${{ github.workspace }}/dist
+        mkdir -p dist
+        cp target/release/zed.exe dist/
         
-        # Copy executable and dependencies
-        cp ${{ github.workspace }}/target/release/zed.exe ${{ github.workspace }}/dist/
-        
-        # Copy any additional required files
-        # cp -r ${{ github.workspace }}/assets ${{ github.workspace }}/dist/
+        # Copy necessary runtime DLLs if needed
+        # cp some-required-dll.dll dist/
