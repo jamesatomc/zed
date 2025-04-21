@@ -4,28 +4,59 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        profile: minimal
         toolchain: stable
-        override: true
-        target: x86_64-pc-windows-msvc
+        targets: x86_64-pc-windows-msvc
+        components: clippy, rustfmt
 
-    - name: Install dependencies
+    - name: Install LLVM and Clang
+      uses: KyleMayes/install-llvm-action@v1
+      with:
+        version: "15.0"
+
+    - name: Install additional dependencies
       shell: powershell
       run: |
-        choco install llvm -y
+        # Install required Windows-specific dependencies
+        winget install -e --id Microsoft.VisualStudio.2022.BuildTools --silent
         
+    - name: Cache cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Build Zed executable
       shell: powershell
       run: |
+        $env:RUSTFLAGS = "-C target-feature=+crt-static"
         cargo build --release --bin zed
+        if (-not $?) { throw "Build failed" }
+        
+    - name: Verify build output
+      shell: powershell
+      run: |
+        if (-not (Test-Path "target/release/zed.exe")) {
+          throw "Build output not found"
+        }
         
     - name: Package executable
       shell: powershell
       run: |
-        mkdir -p dist
-        cp target/release/zed.exe dist/
+        New-Item -ItemType Directory -Force -Path "dist"
+        Copy-Item "target/release/zed.exe" -Destination "dist/"
         
-        # Copy necessary runtime DLLs if needed
-        # cp some-required-dll.dll dist/
+        # Copy assets folder if needed
+        if (Test-Path "assets") {
+          Copy-Item -Path "assets" -Destination "dist/" -Recurse
+        }
+        
+        # Copy any other required files (themes, plugins, etc)
+        # Copy-Item "path/to/resources" -Destination "dist/" -Recurse
+        
+        # Create a zip archive of the distribution
+        Compress-Archive -Path "dist/*" -DestinationPath "zed-windows.zip" -Force
