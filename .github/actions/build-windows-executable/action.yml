@@ -15,30 +15,21 @@ runs:
       with:
         version: "15.0"
 
-    - name: Install additional dependencies
+    - name: Configure Spectre mitigation
       shell: powershell
       run: |
-        # Install required Windows-specific dependencies
-        # Use VS Build Tools installer instead of winget
-        $installerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
-        $installerPath = "$env:TEMP\vs_buildtools.exe"
-        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+        # Find the location of VS spectre-mitigated libs
+        $spectrePath = Get-ChildItem -Path "C:\Program Files (x86)\Microsoft Visual Studio" -Recurse -Filter "spectre-mitigated" | Select-Object -First 1 -ExpandProperty FullName
+        if ($spectrePath) {
+          echo "SPECTRE_MITIGATION_PATH=$spectrePath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "Found Spectre mitigation libraries at: $spectrePath"
+        } else {
+          Write-Warning "Could not find Spectre mitigation libraries!"
+       
         
-        # Install necessary components for C++ development
-        Start-Process -FilePath $installerPath -ArgumentList `
-          "--quiet", "--wait", "--norestart", `
-          "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", `
-          "--add Microsoft.VisualStudio.Component.Windows10SDK.19041" `
-          -Wait -NoNewWindow
-        
-        # Verify installation 
-        if (!(Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC")) {
-            Write-Warning "Visual Studio Build Tools installation may have failed."
-        }
-        
-        # Enable long paths in Windows and Git
-        git config --system core.longpaths true
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Type DWord
+        # Configure environment for msvc_spectre_libs
+        echo "SPECTRE_LLVM_LIB=$spectrePath\lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "VCPKG_FEATURE_FLAGS=-binarycaching" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Set up shorter paths for Cargo
       shell: powershell
@@ -64,14 +55,20 @@ runs:
       shell: powershell
       run: |
         $env:RUSTFLAGS = "-C target-feature=+crt-static"
-        # Skip building pet-related dependencies that have path issues
+        
+        # Explicitly set lib paths
+        $fullSpectreLibPath = $env:SPECTRE_LLVM_LIB
+        echo "Using Spectre lib path: $fullSpectreLibPath"
+        
+        # Skip pet-related dependencies with path length issues
         cargo build --release --bin zed --no-default-features
         if (-not $?) { throw "Build failed" }
         
     - name: Verify build output
       shell: powershell
       run: |
-        if (-not (Test-Path "target/release/zed.exe")) {
+        # Look in the correct output directory
+        if (-not (Test-Path "C:\zb\release\zed.exe")) {
           throw "Build output not found"
         }
         
@@ -79,7 +76,8 @@ runs:
       shell: powershell
       run: |
         New-Item -ItemType Directory -Force -Path "dist"
-        Copy-Item "target/release/zed.exe" -Destination "dist/"
+        # Copy from the correct build location
+        Copy-Item "C:\zb\release\zed.exe" -Destination "dist/"
         
         # Copy assets folder if needed
         if (Test-Path "assets") {
