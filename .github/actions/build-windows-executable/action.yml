@@ -19,8 +19,23 @@ runs:
       shell: powershell
       run: |
         # Install required Windows-specific dependencies
-        winget install -e --id Microsoft.VisualStudio.2022.BuildTools --silent
+        # Use VS Build Tools installer instead of winget
+        $installerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+        $installerPath = "$env:TEMP\vs_buildtools.exe"
+        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
         
+        # Install necessary components for C++ development
+        Start-Process -FilePath $installerPath -ArgumentList `
+          "--quiet", "--wait", "--norestart", `
+          "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", `
+          "--add Microsoft.VisualStudio.Component.Windows10SDK.19041" `
+          -Wait -NoNewWindow
+        
+        # Verify installation 
+        if (!(Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC")) {
+            Write-Warning "Visual Studio Build Tools installation may have failed."
+        }
+
     - name: Cache cargo dependencies
       uses: actions/cache@v3
       with:
