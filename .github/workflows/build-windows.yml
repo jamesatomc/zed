@@ -14,15 +14,52 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
+      
+      # Enable long path support for Windows
+      - name: Enable long paths
+        shell: powershell
+        run: |
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Type DWord -Force
+          git config --system core.longpaths true
+      
+      # VS Build Tools installation with Spectre mitigation
+      - name: Install Visual Studio components
+        shell: powershell
+        run: |
+          $installerUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+          $installerPath = "$env:TEMP\vs_buildtools.exe"
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
           
+          # Install with Spectre mitigation libraries
+          Start-Process -FilePath $installerPath -ArgumentList `
+            "--quiet", "--wait", "--norestart", `
+            "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", `
+            "--add Microsoft.VisualStudio.Component.VC.Tools.ARM64", `
+            "--add Microsoft.VisualStudio.Component.VC.ATL", `
+            "--add Microsoft.VisualStudio.Component.VC.ATLMFC", `
+            "--add Microsoft.VisualStudio.Component.VC.Redist.14.Latest", `
+            "--add Microsoft.VisualStudio.Component.Windows10SDK.19041", `
+            "--add Microsoft.VisualStudio.Component.Spectre.MitigatedLibs.Latest" `
+            -Wait -NoNewWindow
+      
+      # Use shorter paths for cargo cache
+      - name: Setup shorter cargo paths
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\cr"
+          New-Item -ItemType Directory -Force -Path "C:\zb"
+          echo "CARGO_HOME=C:\cr" >> $env:GITHUB_ENV
+          echo "CARGO_TARGET_DIR=C:\zb" >> $env:GITHUB_ENV
+      
+      # Update cache to use shorter paths
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            C:\cr
+            C:\zb
+          key: ${{ runner.os }}-cargo-spectre-${{ hashFiles('**/Cargo.lock') }}
           
       - name: Build Windows executable
         uses: ./.github/actions/build-windows-executable
