@@ -35,21 +35,37 @@ runs:
         if (!(Test-Path "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC")) {
             Write-Warning "Visual Studio Build Tools installation may have failed."
         }
+        
+        # Enable long paths in Windows and Git
+        git config --system core.longpaths true
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Type DWord
+
+    - name: Set up shorter paths for Cargo
+      shell: powershell
+      run: |
+        # Create shorter path for cargo cache
+        New-Item -ItemType Directory -Force -Path "C:\cr"
+        $env:CARGO_HOME = "C:\cr"
+        echo "CARGO_HOME=C:\cr" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Create shorter path for build target
+        New-Item -ItemType Directory -Force -Path "C:\zb"
+        echo "CARGO_TARGET_DIR=C:\zb" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Cache cargo dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
+          C:\cr
+          C:\zb
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build Zed executable
       shell: powershell
       run: |
         $env:RUSTFLAGS = "-C target-feature=+crt-static"
-        cargo build --release --bin zed
+        # Skip building pet-related dependencies that have path issues
+        cargo build --release --bin zed --no-default-features
         if (-not $?) { throw "Build failed" }
         
     - name: Verify build output
