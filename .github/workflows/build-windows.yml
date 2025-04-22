@@ -31,7 +31,7 @@ jobs:
           $installerPath = "$env:TEMP\vs_buildtools.exe"
           Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
           
-          # Install with Spectre mitigation libraries
+          # Install with Spectre mitigation libraries and Windows SDK
           Start-Process -FilePath $installerPath -ArgumentList `
             "--quiet", "--wait", "--norestart", `
             "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", `
@@ -40,8 +40,67 @@ jobs:
             "--add Microsoft.VisualStudio.Component.VC.ATLMFC", `
             "--add Microsoft.VisualStudio.Component.VC.Redist.14.Latest", `
             "--add Microsoft.VisualStudio.Component.Windows10SDK.19041", `
+            "--add Microsoft.VisualStudio.Component.Windows10SDK.20348", `
+            "--add Microsoft.VisualStudio.Component.Windows11SDK.22000", `
+            "--add Microsoft.VisualStudio.Component.Windows11SDK.22621", `
             "--add Microsoft.VisualStudio.Component.Spectre.MitigatedLibs.Latest" `
             -Wait -NoNewWindow
+          
+          # Install standalone Windows SDK if needed
+          $sdkPath = "C:\Program Files (x86)\Windows Kits\10"
+          if (-not (Test-Path "$sdkPath\Lib\10.0.19041.0\um\x64\kernel32.lib")) {
+            Write-Host "Installing Windows SDK separately..."
+            $sdkUrl = "https://go.microsoft.com/fwlink/p/?linkid=2164384"  # Windows 10 SDK 10.0.19041
+            $sdkInstaller = "$env:TEMP\winsdksetup.exe"
+            Invoke-WebRequest -Uri $sdkUrl -OutFile $sdkInstaller
+            Start-Process -FilePath $sdkInstaller -ArgumentList "/q" -Wait -NoNewWindow
+          }
+      
+      # Configure Windows SDK paths
+      - name: Configure Windows SDK paths
+        shell: powershell
+        run: |
+          # Find Windows SDK paths
+          $sdkPaths = @(
+            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0",
+            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22000.0",
+            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0"
+          )
+          
+          $sdkLibPath = $null
+          $sdkUcrtPath = $null
+          
+          foreach ($path in $sdkPaths) {
+            if (Test-Path "$path\um\x64\kernel32.lib") {
+              $sdkLibPath = "$path\um\x64"
+              $sdkUcrtPath = "$path\ucrt\x64"
+              Write-Host "Found Windows SDK at: $path"
+              break
+            }
+          }
+          
+          if ($sdkLibPath) {
+            # Add SDK paths to LIB environment variable
+            $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+            $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
+            $vcLibPath = Join-Path -Path $msvcPath.FullName -ChildPath "lib\x64"
+            
+            $LIB = "$vcLibPath;$sdkLibPath;$sdkUcrtPath"
+            Write-Host "Setting LIB environment variable: $LIB"
+            echo "LIB=$LIB" >> $env:GITHUB_ENV
+            
+            # Check if kernel32.lib exists
+            $kernel32Path = Join-Path -Path $sdkLibPath -ChildPath "kernel32.lib"
+            if (Test-Path $kernel32Path) {
+              Write-Host "Verified kernel32.lib at: $kernel32Path"
+            } else {
+              Write-Warning "kernel32.lib not found at: $kernel32Path"
+              # List files in the directory to debug
+              Get-ChildItem -Path $sdkLibPath
+            }
+          } else {
+            Write-Warning "Could not find Windows SDK with kernel32.lib!"
+          }
       
       # Ensure correct link.exe is used
       - name: Configure PATH for correct link.exe

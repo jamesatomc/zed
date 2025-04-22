@@ -49,7 +49,46 @@ runs:
         # Also set LIB and INCLUDE for the compiler
         $libPath = Join-Path -Path $msvcPath.FullName -ChildPath "lib\x64"
         $includePath = Join-Path -Path $msvcPath.FullName -ChildPath "include"
-        echo "LIB=$libPath;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Find Windows SDK
+        $windowsSdkDir = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0" -Name "InstallationFolder" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstallationFolder
+        $windowsSdkVer = Get-ChildItem -Path "$windowsSdkDir\Lib" -ErrorAction SilentlyContinue | Sort-Object -Property Name -Descending | Select-Object -First 1
+        
+        if ($windowsSdkVer) {
+          $sdkLibPath = Join-Path -Path "$windowsSdkDir\Lib\$($windowsSdkVer.Name)" -ChildPath "um\x64"
+          $sdkUcrtPath = Join-Path -Path "$windowsSdkDir\Lib\$($windowsSdkVer.Name)" -ChildPath "ucrt\x64"
+          Write-Host "Windows SDK Lib Path: $sdkLibPath"
+          Write-Host "Windows SDK UCRT Path: $sdkUcrtPath"
+          
+          # Add SDK paths to LIB environment variable
+          $LIB = "$libPath;$sdkLibPath;$sdkUcrtPath;$env:LIB"
+        } else {
+          # Fallback to known SDK paths
+          Write-Host "Couldn't find Windows SDK in registry, trying known paths..."
+          $possibleSdkPaths = @(
+            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0",
+            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22000.0",
+            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0"
+          )
+          
+          foreach ($path in $possibleSdkPaths) {
+            if (Test-Path "$path\um\x64\kernel32.lib") {
+              $sdkLibPath = "$path\um\x64"
+              $sdkUcrtPath = "$path\ucrt\x64"
+              Write-Host "Found Windows SDK at: $path"
+              break
+            }
+          }
+          
+          if ($sdkLibPath) {
+            $LIB = "$libPath;$sdkLibPath;$sdkUcrtPath;$env:LIB"
+          } else {
+            Write-Warning "Could not find Windows SDK, build may fail!"
+          }
+        }
+        
+        Write-Host "Setting LIB environment variable: $LIB"
+        echo "LIB=$LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
         echo "INCLUDE=$includePath;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Find and configure Spectre mitigation
@@ -152,6 +191,24 @@ runs:
         $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
         Write-Host "Visual Studio at: $vsPath"
         Write-Host "MSVC Tools at: $msvcPath"
+        
+        # Check LIB environment variable
+        Write-Host "LIB Environment Variable:"
+        $env:LIB -split ';' | ForEach-Object { Write-Host "  $_" }
+
+        # Check if kernel32.lib exists in any of the paths
+        $found = $false
+        foreach ($path in ($env:LIB -split ';')) {
+          $kernel32Path = Join-Path -Path $path -ChildPath "kernel32.lib"
+          if (Test-Path $kernel32Path) {
+            Write-Host "Found kernel32.lib at: $kernel32Path"
+            $found = $true
+          }
+        }
+        
+        if (-not $found) {
+          Write-Warning "kernel32.lib not found in any LIB path!"
+        }
 
     - name: Build Zed executable
       shell: powershell
