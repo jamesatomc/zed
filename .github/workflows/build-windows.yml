@@ -43,6 +43,39 @@ jobs:
             "--add Microsoft.VisualStudio.Component.Spectre.MitigatedLibs.Latest" `
             -Wait -NoNewWindow
       
+      # Ensure correct link.exe is used
+      - name: Configure PATH for correct link.exe
+        shell: powershell
+        run: |
+          # Find VS installation path
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
+          $msvcBinPath = Join-Path -Path $msvcPath.FullName -ChildPath "bin\Hostx64\x64"
+          
+          # Show current PATH and which link.exe is in use
+          Write-Host "Original PATH: $env:PATH"
+          try {
+            $linkPath = (Get-Command link.exe -ErrorAction Stop).Source
+            Write-Host "Current link.exe: $linkPath"
+            if ($linkPath -like "*Git*") {
+              Write-Warning "Using Git's link.exe. Will be fixed."
+            }
+          } catch {
+            Write-Warning "link.exe not found in PATH"
+          }
+          
+          # Add VS path to beginning of PATH
+          $env:PATH = "$msvcBinPath;$env:PATH"
+          echo "PATH=$msvcBinPath;$env:PATH" >> $env:GITHUB_ENV
+          
+          # Verify correct link.exe is now used
+          $linkPath = (Get-Command link.exe -ErrorAction SilentlyContinue).Source
+          Write-Host "Now using link.exe from: $linkPath"
+          
+          # Add diagnostic info about the environment
+          Write-Host "Current environment details:"
+          Get-ChildItem env: | Sort-Object -Property Name | Format-Table -Property Name, Value -AutoSize
+      
       # Use shorter paths for cargo cache
       - name: Setup shorter cargo paths
         shell: powershell

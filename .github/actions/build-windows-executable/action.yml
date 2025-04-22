@@ -15,6 +15,43 @@ runs:
       with:
         version: "15.0"
 
+    - name: Configure PATH to prioritize Visual Studio tools
+      shell: pwsh
+      run: |
+        # Ensure Visual Studio's link.exe is used, not Git's
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        Write-Host "VS Path: $vsPath"
+        
+        # Find MSVC Tools directory
+        $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
+        $msvcBinPath = Join-Path -Path $msvcPath.FullName -ChildPath "bin\Hostx64\x64"
+        Write-Host "MSVC Bin Path: $msvcBinPath"
+        
+        # Verify link.exe in the VS path
+        $vsLinkPath = Join-Path -Path $msvcBinPath -ChildPath "link.exe"
+        if (Test-Path $vsLinkPath) {
+          Write-Host "Found Visual Studio link.exe at: $vsLinkPath"
+        } else {
+          Write-Warning "Could not find Visual Studio link.exe in expected location!"
+        }
+        
+        # If Git's link.exe is in the PATH, we need to change the PATH to prioritize VS
+        $gitLinkPath = Get-Command link.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+        if ($gitLinkPath -and $gitLinkPath -like "*Git*") {
+          Write-Warning "Found Git's link.exe in PATH: $gitLinkPath"
+          Write-Host "Will prioritize Visual Studio's link.exe in PATH"
+        }
+        
+        # Prepend VS paths to system PATH
+        $env:PATH = "$msvcBinPath;$env:PATH"
+        echo "PATH=$msvcBinPath;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Also set LIB and INCLUDE for the compiler
+        $libPath = Join-Path -Path $msvcPath.FullName -ChildPath "lib\x64"
+        $includePath = Join-Path -Path $msvcPath.FullName -ChildPath "include"
+        echo "LIB=$libPath;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "INCLUDE=$includePath;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
     - name: Find and configure Spectre mitigation
       shell: pwsh
       run: |
@@ -98,6 +135,23 @@ runs:
           C:\cr
           C:\zb
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Verify build environment
+      shell: powershell
+      run: |
+        # Verify which link.exe is being used
+        $linkPath = (Get-Command link.exe -ErrorAction SilentlyContinue).Source
+        Write-Host "Using link.exe from: $linkPath"
+        
+        # Check PATH environment variable
+        Write-Host "PATH Environment Variable:"
+        $env:PATH -split ';' | ForEach-Object { Write-Host "  $_" }
+        
+        # Check for Visual Studio tools
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
+        Write-Host "Visual Studio at: $vsPath"
+        Write-Host "MSVC Tools at: $msvcPath"
 
     - name: Build Zed executable
       shell: powershell
