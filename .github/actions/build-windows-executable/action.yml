@@ -54,42 +54,107 @@ runs:
         $windowsSdkDir = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0" -Name "InstallationFolder" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstallationFolder
         $windowsSdkVer = Get-ChildItem -Path "$windowsSdkDir\Lib" -ErrorAction SilentlyContinue | Sort-Object -Property Name -Descending | Select-Object -First 1
         
+        # Setup include paths
+        $msvcIncludePath = Join-Path -Path $msvcPath.FullName -ChildPath "include"
+        $sdkIncludePath = $null
+        $sdkUcrtIncludePath = $null
+        $sdkUmIncludePath = $null
+        $sdkSharedIncludePath = $null
+        
         if ($windowsSdkVer) {
-          $sdkLibPath = Join-Path -Path "$windowsSdkDir\Lib\$($windowsSdkVer.Name)" -ChildPath "um\x64"
-          $sdkUcrtPath = Join-Path -Path "$windowsSdkDir\Lib\$($windowsSdkVer.Name)" -ChildPath "ucrt\x64"
-          Write-Host "Windows SDK Lib Path: $sdkLibPath"
-          Write-Host "Windows SDK UCRT Path: $sdkUcrtPath"
+          $sdkIncludePath = Join-Path -Path "$windowsSdkDir\Include\$($windowsSdkVer.Name)" -ChildPath ""
+          $sdkUcrtIncludePath = Join-Path -Path "$windowsSdkDir\Include\$($windowsSdkVer.Name)" -ChildPath "ucrt"
+          $sdkUmIncludePath = Join-Path -Path "$windowsSdkDir\Include\$($windowsSdkVer.Name)" -ChildPath "um"
+          $sdkSharedIncludePath = Join-Path -Path "$windowsSdkDir\Include\$($windowsSdkVer.Name)" -ChildPath "shared"
           
-          # Add SDK paths to LIB environment variable
-          $LIB = "$libPath;$sdkLibPath;$sdkUcrtPath;$env:LIB"
+          Write-Host "Windows SDK Include Path: $sdkIncludePath"
         } else {
           # Fallback to known SDK paths
           Write-Host "Couldn't find Windows SDK in registry, trying known paths..."
           $possibleSdkPaths = @(
-            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0",
-            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22000.0",
-            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0"
+            "C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0",
+            "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22000.0",
+            "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0"
           )
           
           foreach ($path in $possibleSdkPaths) {
-            if (Test-Path "$path\um\x64\kernel32.lib") {
-              $sdkLibPath = "$path\um\x64"
-              $sdkUcrtPath = "$path\ucrt\x64"
-              Write-Host "Found Windows SDK at: $path"
+            if (Test-Path "$path\ucrt\stddef.h") {
+              $sdkIncludePath = $path
+              $sdkUcrtIncludePath = "$path\ucrt"
+              $sdkUmIncludePath = "$path\um"
+              $sdkSharedIncludePath = "$path\shared"
+              Write-Host "Found Windows SDK includes at: $path"
+              break
+            }
+          }
+        }
+        
+        # Setup library paths
+        $sdkLibPath = $null
+        $sdkUcrtPath = $null
+        
+        if ($windowsSdkVer) {
+          $sdkLibPath = Join-Path -Path "$windowsSdkDir\Lib\$($windowsSdkVer.Name)" -ChildPath "um\x64"
+          $sdkUcrtPath = Join-Path -Path "$windowsSdkDir\Lib\$($windowsSdkVer.Name)" -ChildPath "ucrt\x64"
+        } else {
+          # Fallback to known SDK paths for libs
+          foreach ($basePath in $possibleSdkPaths) {
+            $libBasePath = $basePath -replace "Include", "Lib"
+            if (Test-Path "$libBasePath\um\x64\kernel32.lib") {
+              $sdkLibPath = "$libBasePath\um\x64"
+              $sdkUcrtPath = "$libBasePath\ucrt\x64"
+              Write-Host "Found Windows SDK libs at: $libBasePath"
+              break
+            }
+          }
+        }
+        
+        # Set environment variables
+        if ($sdkIncludePath) {
+          # Build INCLUDE path with all required directories
+          $INCLUDE = "$msvcIncludePath;$sdkUcrtIncludePath;$sdkUmIncludePath;$sdkSharedIncludePath;$env:INCLUDE"
+          Write-Host "Setting INCLUDE environment variable: $INCLUDE"
+          echo "INCLUDE=$INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          # Check if stddef.h exists in the include paths
+          $stddefFound = $false
+          foreach ($path in ($INCLUDE -split ';')) {
+            if (Test-Path (Join-Path $path "stddef.h")) {
+              Write-Host "Found stddef.h at: $(Join-Path $path 'stddef.h')"
+              $stddefFound = $true
               break
             }
           }
           
-          if ($sdkLibPath) {
-            $LIB = "$libPath;$sdkLibPath;$sdkUcrtPath;$env:LIB"
-          } else {
-            Write-Warning "Could not find Windows SDK, build may fail!"
+          if (-not $stddefFound) {
+            Write-Warning "stddef.h not found in any include path!"
           }
+        } else {
+          Write-Warning "Could not find Windows SDK include paths!"
         }
         
-        Write-Host "Setting LIB environment variable: $LIB"
-        echo "LIB=$LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "INCLUDE=$includePath;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
+        # Set LIB environment variable
+        if ($sdkLibPath) {
+          $LIB = "$libPath;$sdkLibPath;$sdkUcrtPath;$env:LIB"
+          Write-Host "Setting LIB environment variable: $LIB"
+          echo "LIB=$LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          # Check if kernel32.lib exists
+          $kernel32Found = $false
+          foreach ($path in ($LIB -split ';')) {
+            if (Test-Path (Join-Path $path "kernel32.lib")) {
+              Write-Host "Found kernel32.lib at: $(Join-Path $path 'kernel32.lib')"
+              $kernel32Found = $true
+              break
+            }
+          }
+          
+          if (-not $kernel32Found) {
+            Write-Warning "kernel32.lib not found in any library path!"
+          }
+        } else {
+          Write-Warning "Could not find Windows SDK lib paths!"
+        }
 
     - name: Find and configure Spectre mitigation
       shell: pwsh
@@ -195,6 +260,32 @@ runs:
         # Check LIB environment variable
         Write-Host "LIB Environment Variable:"
         $env:LIB -split ';' | ForEach-Object { Write-Host "  $_" }
+
+        # Check INCLUDE environment variable
+        Write-Host "INCLUDE Environment Variable:"
+        $env:INCLUDE -split ';' | ForEach-Object { Write-Host "  $_" }
+        
+        # Verify C compiler can find standard headers
+        $tempFile = New-TemporaryFile
+        $cTestFile = "$($tempFile.FullName).c"
+        Set-Content -Path $cTestFile -Value '#include <stddef.h>`n#include <stdio.h>`nint main() { return 0; }'
+        
+        Write-Host "Testing C compiler environment..."
+        $clPath = (Get-Command cl.exe -ErrorAction SilentlyContinue).Source
+        if ($clPath) {
+          Write-Host "Using cl.exe from: $clPath"
+          $result = cmd.exe /c "`"$clPath`" /nologo $cTestFile 2>&1"
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "C compiler test successful - compiler can find standard headers!"
+          } else {
+            Write-Warning "C compiler test failed!"
+            Write-Host "Compiler output: $result"
+          }
+        } else {
+          Write-Warning "cl.exe not found in PATH!"
+        }
+        
+        Remove-Item $cTestFile -Force -ErrorAction SilentlyContinue
 
         # Check if kernel32.lib exists in any of the paths
         $found = $false

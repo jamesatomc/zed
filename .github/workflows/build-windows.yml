@@ -48,7 +48,7 @@ jobs:
           
           # Install standalone Windows SDK if needed
           $sdkPath = "C:\Program Files (x86)\Windows Kits\10"
-          if (-not (Test-Path "$sdkPath\Lib\10.0.19041.0\um\x64\kernel32.lib")) {
+          if (-not (Test-Path "$sdkPath\Include\10.0.19041.0\ucrt\stddef.h")) {
             Write-Host "Installing Windows SDK separately..."
             $sdkUrl = "https://go.microsoft.com/fwlink/p/?linkid=2164384"  # Windows 10 SDK 10.0.19041
             $sdkInstaller = "$env:TEMP\winsdksetup.exe"
@@ -62,44 +62,66 @@ jobs:
         run: |
           # Find Windows SDK paths
           $sdkPaths = @(
-            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0",
-            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22000.0",
-            "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0"
+            "C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0",
+            "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22000.0",
+            "C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0"
           )
           
-          $sdkLibPath = $null
-          $sdkUcrtPath = $null
+          $sdkIncludePath = $null
           
           foreach ($path in $sdkPaths) {
-            if (Test-Path "$path\um\x64\kernel32.lib") {
-              $sdkLibPath = "$path\um\x64"
-              $sdkUcrtPath = "$path\ucrt\x64"
-              Write-Host "Found Windows SDK at: $path"
+            if (Test-Path "$path\ucrt\stddef.h") {
+              $sdkIncludePath = $path
+              Write-Host "Found Windows SDK include files at: $path"
+              
+              # Verify all needed include directories exist
+              $ucrtPath = "$path\ucrt"
+              $umPath = "$path\um"
+              $sharedPath = "$path\shared"
+              
+              if ((Test-Path $ucrtPath) -and (Test-Path $umPath) -and (Test-Path $sharedPath)) {
+                Write-Host "Verified all SDK include directories exist:"
+                Write-Host "  UCRT: $ucrtPath"
+                Write-Host "  UM: $umPath"
+                Write-Host "  Shared: $sharedPath"
+              } else {
+                Write-Warning "Some SDK include directories are missing!"
+              }
+              
               break
             }
           }
           
-          if ($sdkLibPath) {
-            # Add SDK paths to LIB environment variable
-            $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-            $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
-            $vcLibPath = Join-Path -Path $msvcPath.FullName -ChildPath "lib\x64"
-            
-            $LIB = "$vcLibPath;$sdkLibPath;$sdkUcrtPath"
-            Write-Host "Setting LIB environment variable: $LIB"
-            echo "LIB=$LIB" >> $env:GITHUB_ENV
-            
-            # Check if kernel32.lib exists
-            $kernel32Path = Join-Path -Path $sdkLibPath -ChildPath "kernel32.lib"
-            if (Test-Path $kernel32Path) {
-              Write-Host "Verified kernel32.lib at: $kernel32Path"
-            } else {
-              Write-Warning "kernel32.lib not found at: $kernel32Path"
-              # List files in the directory to debug
-              Get-ChildItem -Path $sdkLibPath
+          if (-not $sdkIncludePath) {
+            Write-Warning "Could not find Windows SDK include files!"
+            Write-Host "Looking for Windows Kits directory structure..."
+            Get-ChildItem "C:\Program Files (x86)\Windows Kits" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Found: $_"
             }
+          }
+          
+          # Also look for Visual Studio include path
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $msvcPath = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" | Sort-Object -Property Name -Descending | Select-Object -First 1
+          $msvcIncludePath = Join-Path -Path $msvcPath.FullName -ChildPath "include"
+          
+          if (Test-Path $msvcIncludePath) {
+            Write-Host "Found MSVC include path: $msvcIncludePath"
           } else {
-            Write-Warning "Could not find Windows SDK with kernel32.lib!"
+            Write-Warning "Could not find MSVC include path!"
+          }
+          
+          # List installed Windows SDKs using the registry
+          Write-Host "Checking registry for installed Windows SDKs..."
+          try {
+            $installedSDKs = Get-ChildItem "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows" -ErrorAction SilentlyContinue
+            foreach ($sdk in $installedSDKs) {
+              $sdkVersion = Split-Path -Leaf $sdk.PSPath
+              $sdkInstallPath = Get-ItemProperty -Path $sdk.PSPath -Name "InstallationFolder" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstallationFolder
+              Write-Host "SDK $sdkVersion found at: $sdkInstallPath"
+            }
+          } catch {
+            Write-Warning "Error accessing registry: $_"
           }
       
       # Ensure correct link.exe is used
